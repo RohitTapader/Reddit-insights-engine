@@ -3,26 +3,50 @@ import { validateInput } from "@/lib/validators/input";
 import { runLLM } from "@/lib/llm/process";
 
 export async function POST(req: Request) {
-  const { query } = await req.json();
+  try {
+    const body = await req.json();
+    const query = body.query;
 
-  const error = validateInput(query);
-  if (error) return Response.json({ error });
+    if (!query) {
+      return Response.json({ error: "Missing query" }, { status: 400 });
+    }
 
-  const posts = await fetchRedditPosts(query);
+    const error = validateInput(query);
+    if (error) {
+      return Response.json({ error }, { status: 400 });
+    }
 
-  const context = posts.map(p => `${p.title} ${p.content}`).join("\n").slice(0, 4000);
+    const posts = await fetchRedditPosts(query);
 
-  const prompt = `
-  Analyze:
-  ${context}
+    const context = posts
+      .map((p) => `${p.title} ${p.content}`)
+      .join("\n")
+      .slice(0, 3000);
 
-  Provide:
-  - Top user pain points
-  - Feature gaps
-  - Product opportunities
-  `;
+    const prompt = `
+    Analyze the following user discussions:
 
-  const insights = await runLLM(prompt, "insights");
+    ${context}
 
-  return Response.json({ insights, posts });
+    Provide:
+    - Top pain points
+    - Feature gaps
+    - Product opportunities
+    `;
+
+    const insights = await runLLM(prompt, "insights");
+
+    return Response.json({
+      insights: insights || "No insights generated",
+      posts,
+    });
+
+  } catch (err: any) {
+    console.error("API ERROR:", err);
+
+    return Response.json(
+      { error: "Something went wrong in API" },
+      { status: 500 }
+    );
+  }
 }

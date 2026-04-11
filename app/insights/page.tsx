@@ -27,15 +27,19 @@ export default function InsightsPage() {
         body: JSON.stringify({ query }),
       });
 
-      const result = await res.json();
+      const text = await res.text();
 
-      console.log("API response:", result); // 🔍 debug
+      let result;
 
-      if (!res.ok) {
-        setError(result.error || "Something went wrong");
-      } else {
-        setData(result);
-      }
+      try {
+             result = JSON.parse(text);
+           } catch {
+                        console.error("Non-JSON response:", text);
+                        setError("Server error (invalid response)");
+                        return;
+              }
+
+      setData(result);
     } catch (err) {
       console.error(err);
       setError("Failed to fetch insights");
