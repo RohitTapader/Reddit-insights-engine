@@ -4,8 +4,15 @@ import { runLLM } from "@/lib/llm/process";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const query = body.query;
+    let body: { query?: unknown };
+    try {
+      const raw = await req.text();
+      body = raw.trim() ? (JSON.parse(raw) as { query?: unknown }) : {};
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const query = typeof body.query === "string" ? body.query : undefined;
 
     if (!query) {
       return Response.json({ error: "Missing query" }, { status: 400 });
@@ -46,6 +53,13 @@ export async function POST(req: Request) {
 
     if (err instanceof RedditFetchError) {
       return Response.json({ error: err.message }, { status: 502 });
+    }
+
+    if (err instanceof SyntaxError) {
+      return Response.json(
+        { error: "Invalid response from an upstream service (non-JSON)." },
+        { status: 502 }
+      );
     }
 
     const message = err instanceof Error ? err.message : "Something went wrong in API";
