@@ -1,4 +1,4 @@
-import { fetchRedditPosts, RedditFetchError } from "@/lib/mcp/reddit";
+import { fetchRedditPosts } from "@/lib/mcp/reddit";
 import { validateInput } from "@/lib/validators/input";
 import { runLLM } from "@/lib/llm/process";
 
@@ -51,21 +51,10 @@ export async function POST(req: Request) {
   } catch (err: unknown) {
     console.error("API ERROR:", err);
 
-    if (err instanceof RedditFetchError) {
-      return Response.json({ error: err.message }, { status: 502 });
-    }
+   const message = err instanceof Error ? err.message : "Something went wrong";
 
-    if (err instanceof SyntaxError) {
-      return Response.json(
-        { error: "Invalid response from an upstream service (non-JSON)." },
-        { status: 502 }
-      );
-    }
+    const status = message.includes("OPENAI_API_KEY") || message.includes("OpenAI") ? 503 : 500;
 
-    const message = err instanceof Error ? err.message : "Something went wrong in API";
-    const status =
-      message.includes("OPENAI_API_KEY") || message.includes("OpenAI") ? 503 : 500;
-
-    return Response.json({ error: message }, { status });
+    return Response.json({ error: message }, { status: 500 });
   }
 }
