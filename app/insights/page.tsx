@@ -32,12 +32,21 @@ export default function InsightsPage() {
       let result;
 
       try {
-             result = JSON.parse(text);
-           } catch {
-                        console.error("Non-JSON response:", text);
-                        setError("Server error (invalid response)");
-                        return;
-              }
+        result = JSON.parse(text);
+      } catch {
+        console.error("Non-JSON response:", text);
+        setError("Server error (invalid response)");
+        return;
+      }
+
+      if (!res.ok || (result && typeof result === "object" && "error" in result)) {
+        setError(
+          typeof result === "object" && result && "error" in result && typeof (result as { error: unknown }).error === "string"
+            ? (result as { error: string }).error
+            : `Request failed (${res.status})`
+        );
+        return;
+      }
 
       setData(result);
     } catch (err) {

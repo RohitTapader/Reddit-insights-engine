@@ -1,4 +1,4 @@
-import { fetchRedditPosts } from "@/lib/mcp/reddit";
+import { fetchRedditPosts, RedditFetchError } from "@/lib/mcp/reddit";
 import { validateInput } from "@/lib/validators/input";
 import { runLLM } from "@/lib/llm/process";
 
@@ -41,12 +41,17 @@ export async function POST(req: Request) {
       posts,
     });
 
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("API ERROR:", err);
 
-    return Response.json(
-      { error: "Something went wrong in API" },
-      { status: 500 }
-    );
+    if (err instanceof RedditFetchError) {
+      return Response.json({ error: err.message }, { status: 502 });
+    }
+
+    const message = err instanceof Error ? err.message : "Something went wrong in API";
+    const status =
+      message.includes("OPENAI_API_KEY") || message.includes("OpenAI") ? 503 : 500;
+
+    return Response.json({ error: message }, { status });
   }
 }

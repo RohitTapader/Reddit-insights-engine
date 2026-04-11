@@ -3,10 +3,15 @@ import { getMaxTokens } from "./tokens";
 export async function runLLM(prompt: string, intent: string) {
   const maxTokens = getMaxTokens(intent);
 
+  const key = process.env.OPENAI_API_KEY;
+  if (!key?.trim()) {
+    throw new Error("OPENAI_API_KEY is not configured.");
+  }
+
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -28,7 +33,24 @@ export async function runLLM(prompt: string, intent: string) {
     }),
   });
 
-  const data = await res.json();
+  const raw = await res.text();
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`OpenAI returned non-JSON (HTTP ${res.status}).`);
+  }
 
-  return data.choices[0].message.content;
+  const errMsg = (data as { error?: { message?: string } })?.error?.message;
+  if (!res.ok) {
+    throw new Error(errMsg ?? `OpenAI HTTP ${res.status}`);
+  }
+
+  const content = (data as { choices?: { message?: { content?: string } }[] })?.choices?.[0]
+    ?.message?.content;
+  if (content == null || content === "") {
+    throw new Error("OpenAI returned no message content.");
+  }
+
+  return content;
 }
