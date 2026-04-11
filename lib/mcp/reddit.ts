@@ -31,6 +31,8 @@ export type RedditPost = {
           content: p.data.selftext || "",
           subreddit: p.data.subreddit,
           url: `https://reddit.com${p.data.permalink}`,
+          score: p.data.score,
+          comments: p.data.num_comments,
         }));
       } catch {
         continue;
