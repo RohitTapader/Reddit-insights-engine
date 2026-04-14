@@ -24,7 +24,6 @@ type Problem = {
   frequency_reason: string;
   severity_reason: string;
   root_cause: string;
-  suggested_action: string;
   confidence_score: number;
   confidence_reason: string;
   evidence_post_ids: number[];
@@ -32,7 +31,6 @@ type Problem = {
 
 type InsightsResponse = {
   problems: Problem[];
-  competitors: any[];
 };
 
 /* ================= CACHE ================= */
@@ -46,7 +44,6 @@ function keywordScore(post: RedditPost, query: string): number {
   const text = (post.title + " " + post.content).toLowerCase();
 
   let score = 0;
-
   words.forEach((w) => {
     if (post.title.toLowerCase().includes(w)) score += 3;
     if (text.includes(w)) score += 1;
@@ -74,15 +71,12 @@ export async function POST(req: Request) {
       return Response.json({ error }, { status: 400 });
     }
 
-    // ✅ Cache check
     if (cache.has(query)) {
       return Response.json(cache.get(query));
     }
 
-    // ✅ Fetch Reddit data
     const posts: RedditPost[] = await fetchRedditPosts(query);
 
-    // ✅ Rank posts
     const ranked: RankedPost[] = posts
       .map((p: RedditPost): RankedPost => ({
         ...p,
@@ -92,15 +86,13 @@ export async function POST(req: Request) {
 
     const topPosts: RankedPost[] = ranked.slice(0, 8);
 
-    // ✅ Build context
     const context = topPosts
       .map((p: RankedPost, i: number) => `[${i}] ${p.title}\n${p.content}`)
       .join("\n")
       .slice(0, 3000);
 
-    // ✅ Prompt
     const prompt = `
-Analyze Reddit discussions and generate product decisions.
+Analyze Reddit discussions and extract structured user problems.
 
 Return STRICT JSON:
 
@@ -113,23 +105,16 @@ Return STRICT JSON:
       "frequency_reason": "",
       "severity_reason": "",
       "root_cause": "",
-      "suggested_action": "",
       "confidence_score": 0-1,
       "confidence_reason": "",
       "evidence_post_ids": []
-    }
-  ],
-  "competitors": [
-    {
-      "name": "",
-      "strengths": [],
-      "weaknesses": []
     }
   ]
 }
 
 Rules:
-- No duplication
+- Do NOT suggest solutions
+- Focus only on user problems
 - Be concise
 - Use ONLY provided context
 
@@ -137,24 +122,18 @@ Context:
 ${context}
 `;
 
-    // ✅ Call LLM (fixed)
     const raw = await runLLM(prompt);
 
-    // ✅ Safe parsing
     let parsed: InsightsResponse;
 
     try {
       parsed = JSON.parse(raw);
     } catch {
-      parsed = { problems: [], competitors: [] };
+      parsed = { problems: [] };
     }
 
-    // ✅ Structure validation
     parsed = {
       problems: Array.isArray(parsed.problems) ? parsed.problems : [],
-      competitors: Array.isArray(parsed.competitors)
-        ? parsed.competitors
-        : [],
     };
 
     const response = {
@@ -162,7 +141,6 @@ ${context}
       posts: topPosts,
     };
 
-    // ✅ Cache result
     cache.set(query, response);
 
     return Response.json(response);
