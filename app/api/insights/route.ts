@@ -2,13 +2,51 @@ import { fetchRedditPosts } from "@/lib/mcp/reddit";
 import { validateInput } from "@/lib/validators/input";
 import { runLLM } from "@/lib/llm/process";
 
+/* ================= TYPES ================= */
+
+type RedditPost = {
+  title: string;
+  content: string;
+  subreddit: string;
+  url: string;
+  score: number;
+  comments: number;
+};
+
+type RankedPost = RedditPost & {
+  relevance: number;
+};
+
+type Problem = {
+  problem: string;
+  frequency: string;
+  severity: string;
+  frequency_reason: string;
+  severity_reason: string;
+  root_cause: string;
+  suggested_action: string;
+  confidence_score: number;
+  confidence_reason: string;
+  evidence_post_ids: number[];
+};
+
+type InsightsResponse = {
+  problems: Problem[];
+  competitors: any[];
+};
+
+/* ================= CACHE ================= */
+
 const cache = new Map<string, any>();
 
-function keywordScore(post: any, query: string) {
+/* ================= SCORING ================= */
+
+function keywordScore(post: RedditPost, query: string): number {
   const words = query.toLowerCase().split(" ");
   const text = (post.title + " " + post.content).toLowerCase();
 
   let score = 0;
+
   words.forEach((w) => {
     if (post.title.toLowerCase().includes(w)) score += 3;
     if (text.includes(w)) score += 1;
@@ -17,15 +55,17 @@ function keywordScore(post: any, query: string) {
   return score;
 }
 
-function engagementScore(post: any) {
+function engagementScore(post: RedditPost): number {
   return (post.score || 0) * 0.01 + (post.comments || 0) * 0.02;
 }
+
+/* ================= API ================= */
 
 export async function POST(req: Request) {
   try {
     const { query } = await req.json();
 
-    if (!query) {
+    if (!query || typeof query !== "string") {
       return Response.json({ error: "Invalid query" }, { status: 400 });
     }
 
@@ -34,28 +74,33 @@ export async function POST(req: Request) {
       return Response.json({ error }, { status: 400 });
     }
 
+    // ✅ Cache check
     if (cache.has(query)) {
       return Response.json(cache.get(query));
     }
 
-    const posts = await fetchRedditPosts(query);
+    // ✅ Fetch Reddit data
+    const posts: RedditPost[] = await fetchRedditPosts(query);
 
-    const ranked = posts
-      .map((p) => ({
+    // ✅ Rank posts
+    const ranked: RankedPost[] = posts
+      .map((p: RedditPost): RankedPost => ({
         ...p,
         relevance: keywordScore(p, query) + engagementScore(p),
       }))
-      .sort((a, b) => b.relevance - a.relevance);
+      .sort((a: RankedPost, b: RankedPost) => b.relevance - a.relevance);
 
-    const topPosts = ranked.slice(0, 8);
+    const topPosts: RankedPost[] = ranked.slice(0, 8);
 
+    // ✅ Build context
     const context = topPosts
-      .map((p, i) => `[${i}] ${p.title}\n${p.content}`)
+      .map((p: RankedPost, i: number) => `[${i}] ${p.title}\n${p.content}`)
       .join("\n")
       .slice(0, 3000);
 
+    // ✅ Prompt
     const prompt = `
-Analyze Reddit discussions and return product decisions.
+Analyze Reddit discussions and generate product decisions.
 
 Return STRICT JSON:
 
@@ -83,29 +128,49 @@ Return STRICT JSON:
   ]
 }
 
+Rules:
+- No duplication
+- Be concise
+- Use ONLY provided context
+
 Context:
 ${context}
 `;
 
-    const raw = await runLLM(prompt, "insights");
+    // ✅ Call LLM (fixed)
+    const raw = await runLLM(prompt);
 
-    let parsed;
+    // ✅ Safe parsing
+    let parsed: InsightsResponse;
+
     try {
       parsed = JSON.parse(raw);
     } catch {
       parsed = { problems: [], competitors: [] };
     }
 
+    // ✅ Structure validation
+    parsed = {
+      problems: Array.isArray(parsed.problems) ? parsed.problems : [],
+      competitors: Array.isArray(parsed.competitors)
+        ? parsed.competitors
+        : [],
+    };
+
     const response = {
       insights: parsed,
       posts: topPosts,
     };
 
+    // ✅ Cache result
     cache.set(query, response);
 
     return Response.json(response);
 
-  } catch (err: any) {
-    return Response.json({ error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Internal server error";
+
+    return Response.json({ error: message }, { status: 500 });
   }
 }
