@@ -2,152 +2,106 @@ import { fetchRedditPosts } from "@/lib/mcp/reddit";
 import { validateInput } from "@/lib/validators/input";
 import { runLLM } from "@/lib/llm/process";
 
-/* ================= TYPES ================= */
-
-type RedditPost = {
+type Post = {
   title: string;
   content: string;
-  subreddit: string;
-  url: string;
-  score: number;
-  comments: number;
+  subreddit?: string;
+  url?: string;
+  score?: number;
+  comments?: number;
 };
-
-type RankedPost = RedditPost & {
-  relevance: number;
-};
-
-type Problem = {
-  problem: string;
-  frequency: string;
-  severity: string;
-  frequency_reason: string;
-  severity_reason: string;
-  root_cause: string;
-  confidence_score: number;
-  confidence_reason: string;
-  evidence_post_ids: number[];
-};
-
-type InsightsResponse = {
-  problems: Problem[];
-};
-
-/* ================= CACHE ================= */
-
-const cache = new Map<string, any>();
-
-/* ================= SCORING ================= */
-
-function keywordScore(post: RedditPost, query: string): number {
-  const words = query.toLowerCase().split(" ");
-  const text = (post.title + " " + post.content).toLowerCase();
-
-  let score = 0;
-  words.forEach((w) => {
-    if (post.title.toLowerCase().includes(w)) score += 3;
-    if (text.includes(w)) score += 1;
-  });
-
-  return score;
-}
-
-function engagementScore(post: RedditPost): number {
-  return (post.score || 0) * 0.01 + (post.comments || 0) * 0.02;
-}
-
-/* ================= API ================= */
 
 export async function POST(req: Request) {
+  console.log("STEP 1: API HIT");
+
   try {
-    const { query } = await req.json();
+    // -----------------------------
+    // Parse Request
+    // -----------------------------
+    let body: { query?: unknown };
 
-    if (!query || typeof query !== "string") {
-      return Response.json({ error: "Invalid query" }, { status: 400 });
+    try {
+      const raw = await req.text();
+      body = raw.trim() ? JSON.parse(raw) : {};
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const error = validateInput(query);
-    if (error) {
-      return Response.json({ error }, { status: 400 });
+    const query = typeof body.query === "string" ? body.query : undefined;
+
+    if (!query) {
+      return Response.json({ error: "Missing query" }, { status: 400 });
     }
 
-    if (cache.has(query)) {
-      return Response.json(cache.get(query));
+    const validationError = validateInput(query);
+    if (validationError) {
+      return Response.json({ error: validationError }, { status: 400 });
     }
 
-    const posts: RedditPost[] = await fetchRedditPosts(query);
+    // -----------------------------
+    // Fetch Reddit Data (SAFE)
+    // -----------------------------
+    let posts: Post[] = [];
 
-    const ranked: RankedPost[] = posts
-      .map((p: RedditPost): RankedPost => ({
-        ...p,
-        relevance: keywordScore(p, query) + engagementScore(p),
-      }))
-      .sort((a: RankedPost, b: RankedPost) => b.relevance - a.relevance);
+    try {
+      posts = await fetchRedditPosts(query);
+      console.log("STEP 2: Reddit posts fetched:", posts.length);
+    } catch (e) {
+      console.error("REDDIT ERROR:", e);
+      posts = []; // fallback
+    }
 
-    const topPosts: RankedPost[] = ranked.slice(0, 8);
-
-    const context = topPosts
-      .map((p: RankedPost, i: number) => `[${i}] ${p.title}\n${p.content}`)
+    // -----------------------------
+    // Build Context
+    // -----------------------------
+    const context = posts
+      .map((p) => `${p.title} ${p.content}`)
       .join("\n")
       .slice(0, 3000);
 
     const prompt = `
-Analyze Reddit discussions and extract structured user problems.
+Analyze these Reddit discussions about: "${query}"
 
-Return STRICT JSON:
-
-{
-  "problems": [
-    {
-      "problem": "",
-      "frequency": "high|medium|low",
-      "severity": "high|medium|low",
-      "frequency_reason": "",
-      "severity_reason": "",
-      "root_cause": "",
-      "confidence_score": 0-1,
-      "confidence_reason": "",
-      "evidence_post_ids": []
-    }
-  ]
-}
-
-Rules:
-- Do NOT suggest solutions
-- Focus only on user problems
-- Be concise
-- Use ONLY provided context
-
-Context:
 ${context}
+
+Return structured insights:
+1. Top user problems
+2. Key unmet needs
+3. Patterns in complaints
+
+Be concise and specific.
 `;
 
-    const raw = await runLLM(prompt);
-
-    let parsed: InsightsResponse;
+    // -----------------------------
+    // Run LLM (SAFE)
+    // -----------------------------
+    let insights = "LLM temporarily unavailable";
 
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = { problems: [] };
+      insights = await runLLM(prompt);
+      console.log("STEP 3: LLM success");
+    } catch (e) {
+      console.error("LLM ERROR:", e);
     }
 
-    parsed = {
-      problems: Array.isArray(parsed.problems) ? parsed.problems : [],
-    };
-
-    const response = {
-      insights: parsed,
-      posts: topPosts,
-    };
-
-    cache.set(query, response);
-
-    return Response.json(response);
+    // -----------------------------
+    // Final Response
+    // -----------------------------
+    return Response.json({
+      success: true,
+      insights,
+      posts,
+    });
 
   } catch (err: unknown) {
+    console.error("API CRASH:", err);
+
+    if (err instanceof Error) {
+      return Response.json({ error: err.message }, { status: 500 });
+    }
+
     const message =
-      err instanceof Error ? err.message : "Internal server error";
+      err instanceof Error ? err.message : "Unexpected server error";
 
     return Response.json({ error: message }, { status: 500 });
   }
