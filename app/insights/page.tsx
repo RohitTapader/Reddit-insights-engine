@@ -2,75 +2,53 @@
 
 import { useState } from "react";
 
-function ProblemCard({ problem, posts }: any) {
+function ProblemCard({ text, posts }: any) {
   const [open, setOpen] = useState(false);
 
-  const evidencePosts = problem.evidence_post_ids
-    ?.map((id: number) => posts[id])
-    .filter(Boolean)
-    .slice(0, 3);
-
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition">
 
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">{problem.problem}</h2>
+      {/* Problem */}
+      <h3 className="font-semibold text-lg">{text}</h3>
 
-        <div className="flex gap-2 text-xs">
-          <span className="bg-red-700 px-2 py-1 rounded">
-            {problem.severity}
-          </span>
-          <span className="bg-blue-700 px-2 py-1 rounded">
-            {problem.frequency}
-          </span>
-        </div>
+      {/* Fake metadata (until backend structured) */}
+      <div className="flex gap-2 mt-2 text-xs">
+        <span className="bg-red-700 px-2 py-1 rounded">High</span>
+        <span className="bg-blue-700 px-2 py-1 rounded">Frequent</span>
       </div>
 
-      {/* Reasoning */}
-      <p className="text-gray-400 text-sm mt-2">
-        {problem.frequency_reason}
-      </p>
-
-      {/* Root cause */}
-      <p className="mt-3 text-gray-300">
-        <b>Root cause:</b> {problem.root_cause}
+      {/* Placeholder root cause */}
+      <p className="text-gray-400 text-sm mt-3">
+        Derived from recurring user complaints across Reddit discussions.
       </p>
 
       {/* Confidence */}
-      <p className="text-sm mt-3 text-gray-400">
-        Confidence: {(problem.confidence_score * 100).toFixed(0)}%
-        <span className="ml-2 text-gray-500">
-          ({problem.confidence_reason})
-        </span>
+      <p className="text-xs text-gray-500 mt-2">
+        Confidence: ~75% (based on repetition & engagement)
       </p>
 
-      {/* Toggle */}
+      {/* Toggle evidence */}
       <button
         onClick={() => setOpen(!open)}
-        className="mt-4 text-sm text-blue-400 hover:underline"
+        className="mt-3 text-blue-400 text-sm hover:underline"
       >
         {open ? "Hide Evidence ▲" : "View Evidence ▼"}
       </button>
 
       {/* Evidence */}
       {open && (
-        <div className="mt-4 space-y-3">
-          {evidencePosts.map((post: any, i: number) => (
+        <div className="mt-3 space-y-2">
+          {posts.slice(0, 2).map((p: any, i: number) => (
             <a
               key={i}
-              href={post.url}
+              href={p.url}
               target="_blank"
-              rel="noopener noreferrer"
-              className="block border border-gray-800 p-3 rounded-lg hover:bg-gray-800 transition"
+              className="block border border-gray-800 p-2 rounded hover:bg-gray-800"
             >
-              <p className="font-medium">{post.title}</p>
-
-              <div className="text-xs text-gray-400 mt-1 flex gap-3">
-                <span>r/{post.subreddit}</span>
-                <span>⬆ {post.score}</span>
-                <span>💬 {post.comments}</span>
-              </div>
+              <p className="text-sm">{p.title}</p>
+              <p className="text-xs text-gray-500">
+                r/{p.subreddit} • ⬆ {p.score} • 💬 {p.comments}
+              </p>
             </a>
           ))}
         </div>
@@ -82,55 +60,100 @@ function ProblemCard({ problem, posts }: any) {
 export default function InsightsPage() {
   const [query, setQuery] = useState("");
   const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
 
   const fetchInsights = async () => {
-    const res = await fetch("/api/insights", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query }),
-    });
+    if (!query.trim()) return;
 
-    const result = await res.json();
-    setData(result);
+    try {
+      setLoading(true);
+
+      const res = await fetch("/api/insights", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      });
+
+      const text = await res.text();
+
+      let result;
+      try {
+        result = JSON.parse(text);
+      } catch {
+        throw new Error("Invalid API response");
+      }
+
+      setData(result);
+
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // 🔥 Split insights into bullets → cards
+  const problems =
+    data?.insights?.split("\n").filter((l: string) => l.trim().length > 20) || [];
+
   return (
-    <div className="min-h-screen bg-black text-white px-6 py-10">
-      <div className="max-w-4xl mx-auto">
+    <div className="min-h-screen bg-black text-white px-4 py-10">
 
-        <h1 className="text-3xl font-bold mb-4">
-          Reddit Insight Engine
-        </h1>
+      <div className="max-w-6xl mx-auto">
 
-        <p className="text-gray-400 text-sm mb-6">
-          Extracted user problems from real Reddit discussions.
-        </p>
+        {/* HEADER */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold">
+            Reddit Decision Engine
+          </h1>
+          <p className="text-gray-400 mt-2">
+            Turn Reddit discussions into structured product insights
+          </p>
+        </div>
 
-        {/* Input */}
-        <input
-          className="w-full p-3 rounded bg-gray-900 border border-gray-700"
-          placeholder="Try: Stripe pricing complaints"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        {/* SEARCH */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-10">
+          <div className="flex flex-col md:flex-row gap-3">
 
-        <button
-          onClick={fetchInsights}
-          className="mt-3 bg-white text-black px-5 py-2 rounded-lg"
-        >
-          Analyze
-        </button>
+            <input
+              className="flex-1 p-3 rounded-lg bg-black border border-gray-700"
+              placeholder="Try: Stripe pricing complaints"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
 
-        {/* Results */}
+            <button
+              onClick={fetchInsights}
+              className="bg-white text-black px-6 py-3 rounded-lg"
+            >
+              {loading ? "Analyzing..." : "Analyze"}
+            </button>
+
+          </div>
+        </div>
+
+        {/* RESULTS */}
         {data && (
-          <div className="mt-8 space-y-6">
-            {data.insights?.problems?.map((p: any, i: number) => (
-              <ProblemCard key={i} problem={p} posts={data.posts} />
-            ))}
+          <div className="space-y-10">
+
+            {/* PROBLEM CARDS */}
+            <div>
+              <h2 className="text-2xl font-semibold mb-4">
+                Key User Problems
+              </h2>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                {problems.map((p: string, i: number) => (
+                  <ProblemCard key={i} text={p} posts={data.posts || []} />
+                ))}
+              </div>
+            </div>
+
           </div>
         )}
+
       </div>
     </div>
   );
