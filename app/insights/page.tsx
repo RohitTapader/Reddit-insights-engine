@@ -2,158 +2,150 @@
 
 import { useState } from "react";
 
-function ProblemCard({ text, posts }: any) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition">
-
-      {/* Problem */}
-      <h3 className="font-semibold text-lg">{text}</h3>
-
-      {/* Fake metadata (until backend structured) */}
-      <div className="flex gap-2 mt-2 text-xs">
-        <span className="bg-red-700 px-2 py-1 rounded">High</span>
-        <span className="bg-blue-700 px-2 py-1 rounded">Frequent</span>
-      </div>
-
-      {/* Placeholder root cause */}
-      <p className="text-gray-400 text-sm mt-3">
-        Derived from recurring user complaints across Reddit discussions.
-      </p>
-
-      {/* Confidence */}
-      <p className="text-xs text-gray-500 mt-2">
-        Confidence: ~75% (based on repetition & engagement)
-      </p>
-
-      {/* Toggle evidence */}
-      <button
-        onClick={() => setOpen(!open)}
-        className="mt-3 text-blue-400 text-sm hover:underline"
-      >
-        {open ? "Hide Evidence ▲" : "View Evidence ▼"}
-      </button>
-
-      {/* Evidence */}
-      {open && (
-        <div className="mt-3 space-y-2">
-          {posts.slice(0, 2).map((p: any, i: number) => (
-            <a
-              key={i}
-              href={p.url}
-              target="_blank"
-              className="block border border-gray-800 p-2 rounded hover:bg-gray-800"
-            >
-              <p className="text-sm">{p.title}</p>
-              <p className="text-xs text-gray-500">
-                r/{p.subreddit} • ⬆ {p.score} • 💬 {p.comments}
-              </p>
-            </a>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function InsightsPage() {
   const [query, setQuery] = useState("");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   const fetchInsights = async () => {
-    if (!query.trim()) return;
+    if (!query) return;
+
+    setLoading(true);
+    setData(null);
 
     try {
-      setLoading(true);
-
       const res = await fetch("/api/insights", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({ query }),
       });
 
-      const text = await res.text();
-
-      let result;
-      try {
-        result = JSON.parse(text);
-      } catch {
-        throw new Error("Invalid API response");
-      }
-
-      setData(result);
-
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setLoading(false);
+      const json = await res.json();
+      setData(json);
+    } catch (err) {
+      console.error(err);
     }
+
+    setLoading(false);
   };
 
-  // 🔥 Split insights into bullets → cards
-  const problems =
-    data?.insights?.split("\n").filter((l: string) => l.trim().length > 20) || [];
-
   return (
-    <div className="min-h-screen bg-black text-white px-4 py-10">
-
-      <div className="max-w-6xl mx-auto">
-
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black text-white px-6 py-10">
+      <div className="max-w-5xl mx-auto">
+        
         {/* HEADER */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold">
-            Reddit Decision Engine
+        <div className="mb-10">
+          <h1 className="text-4xl font-bold mb-2">
+            Decision Intelligence Engine
           </h1>
-          <p className="text-gray-400 mt-2">
-            Turn Reddit discussions into structured product insights
+          <p className="text-gray-400">
+            Make product decisions based on real user discussions
           </p>
         </div>
 
-        {/* SEARCH */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-10">
-          <div className="flex flex-col md:flex-row gap-3">
+        {/* SEARCH BAR */}
+        <div className="flex flex-col md:flex-row gap-3 mb-8">
+          <input
+            className="flex-1 p-4 rounded-xl text-black text-lg outline-none"
+            placeholder="Search product (e.g. iPhone battery issue, baby diapers rash)..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
 
-            <input
-              className="flex-1 p-3 rounded-lg bg-black border border-gray-700"
-              placeholder="Try: Stripe pricing complaints"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-
-            <button
-              onClick={fetchInsights}
-              className="bg-white text-black px-6 py-3 rounded-lg"
-            >
-              {loading ? "Analyzing..." : "Analyze"}
-            </button>
-
-          </div>
+          <button
+            onClick={fetchInsights}
+            className="bg-white text-black px-6 py-4 rounded-xl font-semibold hover:opacity-90 transition"
+          >
+            Analyze
+          </button>
         </div>
 
-        {/* RESULTS */}
-        {data && (
-          <div className="space-y-10">
+        {/* LOADING */}
+        {loading && (
+          <div className="text-gray-400">Analyzing real user discussions...</div>
+        )}
 
-            {/* PROBLEM CARDS */}
-            <div>
-              <h2 className="text-2xl font-semibold mb-4">
-                Key User Problems
-              </h2>
+        {/* ERROR / EMPTY */}
+        {data?.message && (
+          <div className="text-yellow-400 mt-4">{data.message}</div>
+        )}
 
-              <div className="grid md:grid-cols-2 gap-4">
-                {problems.map((p: string, i: number) => (
-                  <ProblemCard key={i} text={p} posts={data.posts || []} />
-                ))}
-              </div>
-            </div>
-
+        {/* META INFO */}
+        {data?.meta && (
+          <div className="mb-6 flex flex-wrap gap-4 text-sm text-gray-400">
+            <span>Category: {data.category}</span>
+            <span>Posts analyzed: {data.meta.totalPosts}</span>
+            <span>
+              Avg Confidence: {(data.meta.avgConfidence * 100).toFixed(0)}%
+            </span>
+            {data.meta.refinementApplied && (
+              <span className="text-blue-400">Refined Results Applied</span>
+            )}
           </div>
         )}
 
+        {/* RESULTS */}
+        {data?.output?.problems?.length > 0 && (
+          <div className="grid md:grid-cols-2 gap-6">
+            {data.output.problems.map((p: any, i: number) => (
+              <div
+                key={i}
+                className="bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-600 transition"
+              >
+                {/* PROBLEM TITLE */}
+                <h3 className="text-lg font-semibold mb-2">
+                  {p.problem}
+                </h3>
+
+                {/* SEGMENT + CONFIDENCE */}
+                <div className="flex justify-between text-sm mb-3">
+                  <span className="text-blue-400">
+                    {p.segment}
+                  </span>
+                  <span className="text-green-400">
+                    {(p.confidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+
+                {/* REASON */}
+                <p className="text-gray-300 text-sm mb-4">
+                  {p.reason}
+                </p>
+
+                {/* EVIDENCE */}
+                <div>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Evidence from real discussions:
+                  </p>
+
+                  <div className="space-y-1">
+                    {p.evidence_ids.map((id: number) => {
+                      const post = data.posts[id];
+                      if (!post) return null;
+
+                      return (
+                        <a
+                          key={id}
+                          href={post.url}
+                          target="_blank"
+                          className="block text-blue-400 text-sm underline hover:text-blue-300"
+                        >
+                          {post.title}
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* EMPTY STATE */}
+        {data && data.output?.problems?.length === 0 && (
+          <div className="text-gray-400 mt-6">
+            No strong decision signals found. Try a more specific query.
+          </div>
+        )}
       </div>
     </div>
   );

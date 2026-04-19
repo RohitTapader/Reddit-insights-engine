@@ -1,108 +1,148 @@
-import { fetchRedditPosts } from "@/lib/mcp/reddit";
-import { validateInput } from "@/lib/validators/input";
-import { runLLM } from "@/lib/llm/process";
-
-type Post = {
-  title: string;
-  content: string;
-  subreddit?: string;
-  url?: string;
-  score?: number;
-  comments?: number;
-};
+import { classifyCategory } from "@/lib/classifier";
+import { getSegmentationStrategy } from "@/lib/segmentation";
+import { fetchRedditPosts } from "@/lib/reddit";
+import { validatePosts, validateOutput } from "@/lib/validation";
+import { generateDecision } from "@/lib/decision";
 
 export async function POST(req: Request) {
-  console.log("STEP 1: API HIT");
-
   try {
     // -----------------------------
-    // Parse Request
+    // 1. PARSE INPUT SAFELY
     // -----------------------------
     let body: { query?: unknown };
 
     try {
       const raw = await req.text();
-      body = raw.trim() ? JSON.parse(raw) : {};
+      body = raw ? JSON.parse(raw) : {};
     } catch {
       return Response.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const query = typeof body.query === "string" ? body.query : undefined;
+    const query = typeof body.query === "string" ? body.query.trim() : "";
 
-    if (!query) {
-      return Response.json({ error: "Missing query" }, { status: 400 });
-    }
-
-    const validationError = validateInput(query);
-    if (validationError) {
-      return Response.json({ error: validationError }, { status: 400 });
-    }
-
-    // -----------------------------
-    // Fetch Reddit Data (SAFE)
-    // -----------------------------
-    let posts: Post[] = [];
-
-    try {
-      posts = await fetchRedditPosts(query);
-      console.log("STEP 2: Reddit posts fetched:", posts.length);
-    } catch (e) {
-      console.error("REDDIT ERROR:", e);
-      posts = []; // fallback
+    if (!query || query.length < 3) {
+      return Response.json(
+        { error: "Query must be at least 3 characters" },
+        { status: 400 }
+      );
     }
 
     // -----------------------------
-    // Build Context
+    // 2. CATEGORY CLASSIFICATION
     // -----------------------------
-    const context = posts
-      .map((p) => `${p.title} ${p.content}`)
-      .join("\n")
-      .slice(0, 3000);
-
-    const prompt = `
-Analyze these Reddit discussions about: "${query}"
-
-${context}
-
-Return structured insights:
-1. Top user problems
-2. Key unmet needs
-3. Patterns in complaints
-
-Be concise and specific.
-`;
+    const { category } = await classifyCategory(query);
 
     // -----------------------------
-    // Run LLM (SAFE)
+    // 3. SEGMENT STRATEGY
     // -----------------------------
-    let insights = "LLM temporarily unavailable";
+    const segments = getSegmentationStrategy(category);
 
-    try {
-      insights = await runLLM(prompt);
-      console.log("STEP 3: LLM success");
-    } catch (e) {
-      console.error("LLM ERROR:", e);
+    // -----------------------------
+    // 4. FETCH REDDIT DATA
+    // -----------------------------
+    let posts = await fetchRedditPosts(query);
+
+    posts = validatePosts(posts);
+
+    // -----------------------------
+    // 5. BASIC AGENT LOOP (RETRY)
+    // -----------------------------
+    if (posts.length < 3) {
+      const fallbackQuery = `${query} review experience`;
+
+      let retryPosts = await fetchRedditPosts(fallbackQuery);
+      retryPosts = validatePosts(retryPosts);
+
+      if (retryPosts.length > posts.length) {
+        posts = retryPosts;
+      }
     }
 
     // -----------------------------
-    // Final Response
+    // 6. FAIL SAFE IF NO DATA
+    // -----------------------------
+    if (posts.length === 0) {
+      return Response.json({
+        category,
+        segments,
+        output: {
+          problems: [],
+        },
+        posts: [],
+        message: "No sufficient data found. Try a more specific query.",
+      });
+    }
+
+    // -----------------------------
+    // 7. DECISION ENGINE
+    // -----------------------------
+    const output = await generateDecision(posts, segments);
+
+    // -----------------------------
+    // 8. OUTPUT VALIDATION
+    // -----------------------------
+    if (!validateOutput(output)) {
+      return Response.json(
+        { error: "Model output invalid or malformed" },
+        { status: 500 }
+      );
+    }
+
+    // -----------------------------
+    // 9. BASIC CONFIDENCE CHECK (AGENT-LIKE)
+    // -----------------------------
+    const avgConfidence =
+      output.problems.reduce(
+        (acc: number, p: any) => acc + (p.confidence || 0),
+        0
+      ) / (output.problems.length || 1);
+
+    // If confidence too low → try one refinement
+    if (avgConfidence < 0.4 && posts.length >= 3) {
+      const refinedPosts = posts.slice(0, 5); // reduce noise
+
+      const refinedOutput = await generateDecision(
+        refinedPosts,
+        segments
+      );
+
+      if (validateOutput(refinedOutput)) {
+        return Response.json({
+          category,
+          segments,
+          output: refinedOutput,
+          posts: refinedPosts,
+          meta: {
+            refinementApplied: true,
+            avgConfidence,
+          },
+        });
+      }
+    }
+
+    // -----------------------------
+    // 10. FINAL RESPONSE
     // -----------------------------
     return Response.json({
-      success: true,
-      insights,
+      category,
+      segments,
+      output,
       posts,
+      meta: {
+        avgConfidence,
+        totalPosts: posts.length,
+      },
     });
 
   } catch (err: unknown) {
-    console.error("API CRASH:", err);
-
-    if (err instanceof Error) {
-      return Response.json({ error: err.message }, { status: 500 });
-    }
+    console.error("API ERROR:", err);
 
     const message =
-      err instanceof Error ? err.message : "Unexpected server error";
+      err instanceof Error ? err.message : "Internal server error";
 
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json(
+      { error: message },
+      { status: 500 }
+    );
   }
 }
