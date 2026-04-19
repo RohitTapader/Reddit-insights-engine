@@ -5,26 +5,29 @@ export type RedditPost = {
     created: number;
   };
   
-  function isHTML(text: string) {
-    return text.trim().startsWith("<");
+  function safeParse(text: string) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
   }
   
-  async function searchReddit(query: string): Promise<RedditPost[]> {
+  export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
+    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+      `https://www.reddit.com/search.json?q=${query}&limit=10`
+    )}`;
+  
     try {
-      const res = await fetch(
-        `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=5`,
-        {
-          headers: {
-            "User-Agent": "insights-engine/1.0",
-          },
-        }
-      );
+      const res = await fetch(url);
   
       const text = await res.text();
+      const json = safeParse(text);
   
-      if (isHTML(text)) return [];
-  
-      const json = JSON.parse(text);
+      if (!json || !json.data?.children) {
+        console.error("Invalid Reddit response");
+        return [];
+      }
   
       return json.data.children.map((c: any) => ({
         title: c.data.title,
@@ -32,34 +35,8 @@ export type RedditPost = {
         url: `https://reddit.com${c.data.permalink}`,
         created: c.data.created_utc,
       }));
-    } catch {
+    } catch (err) {
+      console.error("Reddit fetch failed:", err);
       return [];
     }
-  }
-  
-  export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
-    // 🔥 QUERY EXPANSION
-    const queries = [
-      query,
-      `${query} review`,
-      `${query} problem`,
-      `${query} experience`,
-      `${query} reddit`,
-    ];
-  
-    let allPosts: RedditPost[] = [];
-  
-    for (const q of queries) {
-      const results = await searchReddit(q);
-      allPosts = [...allPosts, ...results];
-    }
-  
-    // 🔥 DEDUP
-    const unique = new Map();
-    allPosts.forEach((p) => {
-      const key = p.title.toLowerCase();
-      if (!unique.has(key)) unique.set(key, p);
-    });
-  
-    return Array.from(unique.values()).slice(0, 10);
   }
