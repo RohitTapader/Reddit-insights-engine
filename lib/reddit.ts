@@ -5,27 +5,39 @@ export type RedditPost = {
     created: number;
   };
   
-  export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
-    console.log("Mock Reddit data for:", query);
+  function isHTML(text: string) {
+    return text.trim().startsWith("<");
+  }
   
-    return [
-      {
-        title: "Battery drains too fast",
-        content: "My phone lasts only 5 hours with normal usage",
-        url: "https://reddit.com/r/sample1",
-        created: Date.now() / 1000,
-      },
-      {
-        title: "Overheating problem",
-        content: "Phone heats up while charging and gaming",
-        url: "https://reddit.com/r/sample2",
-        created: Date.now() / 1000,
-      },
-      {
-        title: "Charging is slow",
-        content: "Takes more than 2 hours to charge fully",
-        url: "https://reddit.com/r/sample3",
-        created: Date.now() / 1000,
-      },
-    ];
+  export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
+    try {
+      const res = await fetch(
+        `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=10`,
+        {
+          headers: {
+            "User-Agent": "insights-engine/1.0",
+          },
+        }
+      );
+  
+      const text = await res.text();
+  
+      // 🚨 handle HTML response (403 case)
+      if (isHTML(text)) {
+        console.error("Reddit returned HTML (likely blocked)");
+        return [];
+      }
+  
+      const json = JSON.parse(text);
+  
+      return json.data.children.map((c: any) => ({
+        title: c.data.title,
+        content: c.data.selftext || "",
+        url: `https://reddit.com${c.data.permalink}`,
+        created: c.data.created_utc,
+      }));
+    } catch (err) {
+      console.error("Reddit fetch failed:", err);
+      return [];
+    }
   }
