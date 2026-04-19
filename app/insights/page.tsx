@@ -51,7 +51,10 @@ export default function InsightsPage() {
           placeholder="Try: iphone battery issue, baby diapers rash..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="flex-1 p-4 rounded-xl text-black text-lg outline-none"
+          className="flex-1 p-4 rounded-xl bg-gray-800 text-white
+          placeholder-gray-400 text-lg outline-none
+          border border-gray-700 focus:border-white
+          transition"
         />
 
         <button
