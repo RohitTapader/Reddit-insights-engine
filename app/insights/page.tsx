@@ -9,10 +9,10 @@ export default function InsightsPage() {
 
   const fetchInsights = async () => {
     if (!query.trim()) return;
-
+  
     setLoading(true);
     setData(null);
-
+  
     try {
       const res = await fetch("/api/insights", {
         method: "POST",
@@ -21,13 +21,28 @@ export default function InsightsPage() {
         },
         body: JSON.stringify({ query }),
       });
-
-      const json = await res.json();
+  
+      const text = await res.text(); // 👈 read raw response
+  
+      let json;
+  
+      try {
+        json = JSON.parse(text);
+      } catch {
+        console.error("Non-JSON response received:", text);
+        setData({
+          error: "API returned invalid response (not JSON). Check backend logs.",
+        });
+        setLoading(false);
+        return;
+      }
+  
       setData(json);
     } catch (err) {
-      console.error(err);
+      console.error("Frontend fetch error:", err);
+      setData({ error: "Failed to fetch insights" });
     }
-
+  
     setLoading(false);
   };
 

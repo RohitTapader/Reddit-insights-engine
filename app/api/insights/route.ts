@@ -1,148 +1,159 @@
-import { classifyCategory } from "@/lib/classifier";
-import { getSegmentationStrategy } from "@/lib/segmentation";
 import { fetchRedditPosts } from "@/lib/reddit";
-import { validatePosts, validateOutput } from "@/lib/validation";
-import { generateDecision } from "@/lib/decision";
+import { runLLM } from "@/lib/llm";
+
+/** ---- TYPES ---- */
+
+type RedditPost = {
+  title: string;
+  content: string;
+  url: string;
+  created: number;
+};
+
+type Problem = {
+  problem: string;
+  segment: string;
+  confidence: number;
+  reason: string;
+  evidence_ids: number[];
+};
+
+type LLMOutput = {
+  problems: Problem[];
+};
+
+/** ---- SIMPLE CLASSIFIER (TEMP) ---- */
+
+function classifyCategory(query: string): string {
+  const q = query.toLowerCase();
+
+  if (q.includes("diaper") || q.includes("baby")) return "baby";
+  if (q.includes("phone") || q.includes("iphone")) return "electronics";
+  if (q.includes("shoe") || q.includes("nike")) return "fashion";
+
+  return "general";
+}
+
+/** ---- SEGMENTATION ---- */
+
+function segmentUsers(category: string): string[] {
+  switch (category) {
+    case "baby":
+      return ["budget-conscious parents", "premium parents"];
+    case "electronics":
+      return ["power users", "casual users"];
+    case "fashion":
+      return ["style-focused", "budget buyers"];
+    default:
+      return ["general users"];
+  }
+}
+
+/** ---- MAIN API ---- */
 
 export async function POST(req: Request) {
   try {
-    // -----------------------------
-    // 1. PARSE INPUT SAFELY
-    // -----------------------------
-    let body: { query?: unknown };
+    const body = await req.json();
+    const query = body?.query;
 
-    try {
-      const raw = await req.text();
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
-
-    const query = typeof body.query === "string" ? body.query.trim() : "";
-
-    if (!query || query.length < 3) {
-      return Response.json(
-        { error: "Query must be at least 3 characters" },
+    if (!query || typeof query !== "string") {
+      return new Response(
+        JSON.stringify({ error: "Missing query" }),
         { status: 400 }
       );
     }
 
-    // -----------------------------
-    // 2. CATEGORY CLASSIFICATION
-    // -----------------------------
-    const { category } = await classifyCategory(query);
+    /** 1. Fetch posts */
+    const posts: RedditPost[] = await fetchRedditPosts(query);
 
-    // -----------------------------
-    // 3. SEGMENT STRATEGY
-    // -----------------------------
-    const segments = getSegmentationStrategy(category);
+    /** 2. Prepare context */
+    const context = posts
+      .map((p) => `${p.title}. ${p.content}`)
+      .join("\n")
+      .slice(0, 3000);
 
-    // -----------------------------
-    // 4. FETCH REDDIT DATA
-    // -----------------------------
-    let posts = await fetchRedditPosts(query);
+    /** 3. Classification */
+    const category = classifyCategory(query);
+    const segments = segmentUsers(category);
 
-    posts = validatePosts(posts);
+    /** 4. LLM prompt */
+    const prompt = `
+You are a product intelligence system.
 
-    // -----------------------------
-    // 5. BASIC AGENT LOOP (RETRY)
-    // -----------------------------
-    if (posts.length < 3) {
-      const fallbackQuery = `${query} review experience`;
+Analyze real user discussions and extract decision-ready insights.
 
-      let retryPosts = await fetchRedditPosts(fallbackQuery);
-      retryPosts = validatePosts(retryPosts);
+Return STRICT JSON:
 
-      if (retryPosts.length > posts.length) {
-        posts = retryPosts;
-      }
+{
+  "problems": [
+    {
+      "problem": "string",
+      "segment": "string",
+      "confidence": 0-1,
+      "reason": "string",
+      "evidence_ids": [0,1]
+    }
+  ]
+}
+
+User query: ${query}
+Category: ${category}
+Segments: ${segments.join(", ")}
+
+Posts:
+${context}
+`;
+
+    /** 5. LLM call */
+    const raw = await runLLM(prompt);
+
+    let output: LLMOutput;
+
+    try {
+      output = JSON.parse(raw);
+    } catch {
+      console.error("LLM RAW OUTPUT:", raw);
+      throw new Error("LLM returned invalid JSON");
     }
 
-    // -----------------------------
-    // 6. FAIL SAFE IF NO DATA
-    // -----------------------------
-    if (posts.length === 0) {
-      return Response.json({
+    /** 6. Confidence */
+    const avgConfidence =
+      output.problems.reduce((sum, p) => sum + p.confidence, 0) /
+      (output.problems.length || 1);
+
+    /** 7. RESPONSE */
+    return new Response(
+      JSON.stringify({
         category,
         segments,
-        output: {
-          problems: [],
+        output,
+        posts,
+        meta: {
+          avgConfidence,
+          totalPosts: posts.length,
         },
-        posts: [],
-        message: "No sufficient data found. Try a more specific query.",
-      });
-    }
-
-    // -----------------------------
-    // 7. DECISION ENGINE
-    // -----------------------------
-    const output = await generateDecision(posts, segments);
-
-    // -----------------------------
-    // 8. OUTPUT VALIDATION
-    // -----------------------------
-    if (!validateOutput(output)) {
-      return Response.json(
-        { error: "Model output invalid or malformed" },
-        { status: 500 }
-      );
-    }
-
-    // -----------------------------
-    // 9. BASIC CONFIDENCE CHECK (AGENT-LIKE)
-    // -----------------------------
-    const avgConfidence =
-      output.problems.reduce(
-        (acc: number, p: any) => acc + (p.confidence || 0),
-        0
-      ) / (output.problems.length || 1);
-
-    // If confidence too low → try one refinement
-    if (avgConfidence < 0.4 && posts.length >= 3) {
-      const refinedPosts = posts.slice(0, 5); // reduce noise
-
-      const refinedOutput = await generateDecision(
-        refinedPosts,
-        segments
-      );
-
-      if (validateOutput(refinedOutput)) {
-        return Response.json({
-          category,
-          segments,
-          output: refinedOutput,
-          posts: refinedPosts,
-          meta: {
-            refinementApplied: true,
-            avgConfidence,
-          },
-        });
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
       }
-    }
-
-    // -----------------------------
-    // 10. FINAL RESPONSE
-    // -----------------------------
-    return Response.json({
-      category,
-      segments,
-      output,
-      posts,
-      meta: {
-        avgConfidence,
-        totalPosts: posts.length,
-      },
-    });
-
+    );
   } catch (err: unknown) {
     console.error("API ERROR:", err);
 
     const message =
       err instanceof Error ? err.message : "Internal server error";
 
-    return Response.json(
-      { error: message },
-      { status: 500 }
+    return new Response(
+      JSON.stringify({ error: message }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
     );
   }
 }
