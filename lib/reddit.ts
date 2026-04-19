@@ -9,10 +9,10 @@ export type RedditPost = {
     return text.trim().startsWith("<");
   }
   
-  export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
+  async function searchReddit(query: string): Promise<RedditPost[]> {
     try {
       const res = await fetch(
-        `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=10`,
+        `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=5`,
         {
           headers: {
             "User-Agent": "insights-engine/1.0",
@@ -22,11 +22,7 @@ export type RedditPost = {
   
       const text = await res.text();
   
-      // 🚨 handle HTML response (403 case)
-      if (isHTML(text)) {
-        console.error("Reddit returned HTML (likely blocked)");
-        return [];
-      }
+      if (isHTML(text)) return [];
   
       const json = JSON.parse(text);
   
@@ -36,8 +32,34 @@ export type RedditPost = {
         url: `https://reddit.com${c.data.permalink}`,
         created: c.data.created_utc,
       }));
-    } catch (err) {
-      console.error("Reddit fetch failed:", err);
+    } catch {
       return [];
     }
+  }
+  
+  export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
+    // 🔥 QUERY EXPANSION
+    const queries = [
+      query,
+      `${query} review`,
+      `${query} problem`,
+      `${query} experience`,
+      `${query} reddit`,
+    ];
+  
+    let allPosts: RedditPost[] = [];
+  
+    for (const q of queries) {
+      const results = await searchReddit(q);
+      allPosts = [...allPosts, ...results];
+    }
+  
+    // 🔥 DEDUP
+    const unique = new Map();
+    allPosts.forEach((p) => {
+      const key = p.title.toLowerCase();
+      if (!unique.has(key)) unique.set(key, p);
+    });
+  
+    return Array.from(unique.values()).slice(0, 10);
   }
