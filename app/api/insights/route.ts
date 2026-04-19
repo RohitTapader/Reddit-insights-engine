@@ -22,7 +22,25 @@ type LLMOutput = {
   problems: Problem[];
 };
 
-/** ---- SIMPLE CLASSIFIER (TEMP) ---- */
+/** ---- SAFE JSON PARSER ---- */
+
+function safeParseJSON(text: string): any | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+/** ---- SIMPLE CLASSIFIER ---- */
 
 function classifyCategory(query: string): string {
   const q = query.toLowerCase();
@@ -59,16 +77,27 @@ export async function POST(req: Request) {
     if (!query || typeof query !== "string") {
       return new Response(
         JSON.stringify({ error: "Missing query" }),
-        { status: 400 }
+        { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
     /** 1. Fetch posts */
     const posts: RedditPost[] = await fetchRedditPosts(query);
 
+    if (!posts.length) {
+      return new Response(
+        JSON.stringify({
+          output: { problems: [] },
+          posts: [],
+          message: "No data found",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     /** 2. Prepare context */
     const context = posts
-      .map((p) => `${p.title}. ${p.content}`)
+      .map((p, i) => `[${i}] ${p.title}. ${p.content}`)
       .join("\n")
       .slice(0, 3000);
 
@@ -76,45 +105,44 @@ export async function POST(req: Request) {
     const category = classifyCategory(query);
     const segments = segmentUsers(category);
 
-    /** 4. LLM prompt */
+    /** 4. STRICT PROMPT */
     const prompt = `
-You are a product intelligence system.
-
-Analyze real user discussions and extract decision-ready insights.
-
-Return STRICT JSON:
+Return ONLY valid JSON.
 
 {
   "problems": [
     {
       "problem": "string",
       "segment": "string",
-      "confidence": 0-1,
+      "confidence": number (0 to 1),
       "reason": "string",
-      "evidence_ids": [0,1]
+      "evidence_ids": [0]
     }
   ]
 }
 
-User query: ${query}
-Category: ${category}
-Segments: ${segments.join(", ")}
+Rules:
+- No text outside JSON
+- Use ONLY given posts
+- Map to segments: ${segments.join(", ")}
+
+Query: ${query}
 
 Posts:
 ${context}
 `;
 
-    /** 5. LLM call */
+    /** 5. LLM */
     const raw = await runLLM(prompt);
 
-    let output: LLMOutput;
+    const parsed = safeParseJSON(raw);
 
-    try {
-      output = JSON.parse(raw);
-    } catch {
+    if (!parsed || !parsed.problems) {
       console.error("LLM RAW OUTPUT:", raw);
       throw new Error("LLM returned invalid JSON");
     }
+
+    const output: LLMOutput = parsed;
 
     /** 6. Confidence */
     const avgConfidence =

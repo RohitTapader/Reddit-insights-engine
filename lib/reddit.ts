@@ -5,12 +5,8 @@ export type RedditPost = {
     created: number;
   };
   
-  /**
-   * TEMP SAFE VERSION
-   * Avoids Reddit 403 / HTML issues on Vercel
-   */
   export async function fetchRedditPosts(query: string): Promise<RedditPost[]> {
-    console.log("Mock Reddit fetch for:", query);
+    console.log("Mock Reddit data for:", query);
   
     return [
       {
